@@ -1,11 +1,19 @@
+[package]
+name = "llama_cpp-rs"
+version = "0.3.1"
+edition = "2021"
+
+[lib]
+name = "llama_cpp_rs"
+
 [workspace]
 resolver = "2"
-members = [
-    "crates/llama_cpp_sys",
-    "crates/llama_cpp",
-    "crates/llama_cpp_tests"
-]
+members = ["crates/llama_cpp_sys", "crates/llama_cpp", "crates/llama_cpp_tests"]
 
 [workspace.dependencies]
 futures = "0.3.30"
 tokio = "1.36.0"
+
+[dependencies]
+llama_cpp = { path = "crates/llama_cpp" }
+llama_cpp_sys = { path = "crates/llama_cpp_sys" }

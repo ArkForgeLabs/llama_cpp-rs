@@ -1,3 +1,5 @@
+This is a fork of [llama_cpp-rs](https://github.com/edgenai/llama_cpp-rs) with all the dependencies included and turned into a `lib`.
+
 # llama_cpp-rs
 
 [![Documentation](https://docs.rs/llama_cpp/badge.svg)](https://docs.rs/llama_cpp/)
