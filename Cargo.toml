@@ -17,3 +17,31 @@ futures = "0.3.30"
 [dependencies]
 llama_cpp = { path = "crates/llama_cpp" }
 llama_cpp_sys = { path = "crates/llama_cpp_sys" }
+
+[features]
+default = ["compat", "native"]
+compat = [
+    "llama_cpp/compat",
+] # this feature modifies the symbols exposed by the generated libraries to avoid conflicts
+native = ["llama_cpp/native", "avx", "avx2", "fma", "f16c", "accel"]
+avx = ["llama_cpp/avx"]
+avx2 = ["llama_cpp/avx2"]
+avx512 = ["llama_cpp/avx512"]
+avx512_vmbi = ["llama_cpp/avx512_vmbi"]
+avx512_vnni = ["llama_cpp/avx512_vnni"]
+fma = ["llama_cpp/fma"]
+f16c = ["llama_cpp/f16c"] # implied when compiled using MSVC with avx2/avx512
+accel = ["llama_cpp/accel"] # Accelerate framework
+mpi = ["llama_cpp/mpi"]
+cuda = ["llama_cpp/cuda"]
+cuda_f16 = ["llama_cpp/cuda_f16", "cuda"]
+cuda_dmmv = [
+    "llama_cpp/cuda_dmmv",
+    "cuda",
+] # use dmmv instead of mmvq CUDA kernels
+cuda_mmq = ["llama_cpp/cuda_mmq", "cuda"] # use mmq kernels instead of cuBLAS
+metal = ["llama_cpp/metal"]
+blas = ["llama_cpp/blas"]
+hipblas = ["llama_cpp/hipblas"]
+clblast = ["llama_cpp/clblast"]
+vulkan = ["llama_cpp/vulkan"]
