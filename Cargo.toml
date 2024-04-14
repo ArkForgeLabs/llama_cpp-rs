@@ -11,8 +11,8 @@ resolver = "2"
 members = ["crates/llama_cpp_sys", "crates/llama_cpp", "crates/llama_cpp_tests"]
 
 [workspace.dependencies]
-futures = "0.3.30"
 tokio = { version = "1.34.0", features = ["rt-multi-thread"] }
+futures = "0.3.30"
 
 [dependencies]
 llama_cpp = { path = "crates/llama_cpp" }

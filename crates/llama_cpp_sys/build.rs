@@ -1,10 +1,11 @@
 use std::env;
-use std::fs::File;
+use std::fs::{read_dir, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use bindgen::callbacks::{ItemInfo, ItemKind, ParseCallbacks};
+use bindgen::EnumVariation;
 use cc::Build;
 use once_cell::sync::Lazy;
 
@@ -86,13 +87,13 @@ compile_error!("feature \"clblas\" cannot be enabled alongside other GPU based f
 compile_error!("feature \"vulkan\" cannot be enabled alongside other GPU based features");
 
 /// The general prefix used to rename conflicting symbols.
-const PREFIX: &str = "llama_";
+const PREFIX: &str = "llm_";
 
 static LLAMA_PATH: Lazy<PathBuf> = Lazy::new(|| PathBuf::from("./thirdparty/llama.cpp"));
 
 fn compile_bindings(out_path: &Path) {
     println!("Generating bindings..");
-    let bindings = bindgen::Builder::default()
+    let mut bindings = bindgen::Builder::default()
         .header(LLAMA_PATH.join("ggml.h").to_string_lossy())
         .header(LLAMA_PATH.join("llama.h").to_string_lossy())
         .derive_partialeq(true)
@@ -100,18 +101,37 @@ fn compile_bindings(out_path: &Path) {
         .allowlist_type("ggml_.*")
         .allowlist_function("llama_.*")
         .allowlist_type("llama_.*")
-        .parse_callbacks(Box::new(GGMLLinkRename {}))
-        .generate()
-        .expect("Unable to generate bindings");
+        .default_enum_style(EnumVariation::Rust {
+            non_exhaustive: true,
+        })
+        .constified_enum("llama_gretype");
+
+    #[cfg(all(
+        feature = "compat",
+        not(any(target_os = "macos", target_os = "ios", target_os = "dragonfly"))
+    ))]
+    {
+        bindings = bindings.parse_callbacks(Box::new(GGMLLinkRename {}));
+    }
+
+    let bindings = bindings.generate().expect("Unable to generate bindings");
 
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 }
 
+#[cfg(all(
+    feature = "compat",
+    not(any(target_os = "macos", target_os = "ios", target_os = "dragonfly"))
+))]
 #[derive(Debug)]
 struct GGMLLinkRename {}
 
+#[cfg(all(
+    feature = "compat",
+    not(any(target_os = "macos", target_os = "ios", target_os = "dragonfly"))
+))]
 impl ParseCallbacks for GGMLLinkRename {
     fn generated_link_name_override(&self, item_info: ItemInfo<'_>) -> Option<String> {
         match item_info.kind {
@@ -129,8 +149,12 @@ impl ParseCallbacks for GGMLLinkRename {
 
 /// Add platform appropriate flags and definitions present in all compilation configurations.
 fn push_common_flags(cx: &mut Build, cxx: &mut Build) {
-    cx.static_flag(true).cpp(false).std("c11");
-    cxx.static_flag(true).cpp(true).std("c++14"); // MSVC does not support C++11
+    cx.static_flag(true)
+        .cpp(false)
+        .define("GGML_SCHED_MAX_COPIES", "4");
+    cxx.static_flag(true)
+        .cpp(true)
+        .define("GGML_SCHED_MAX_COPIES", "4");
 
     if !cfg!(debug_assertions) {
         cx.define("NDEBUG", None);
@@ -351,9 +375,9 @@ fn compile_blis(cx: &mut Build) {
 fn compile_hipblas(cx: &mut Build, cxx: &mut Build, mut hip: Build) -> &'static str {
     const DEFAULT_ROCM_PATH_STR: &str = "/opt/rocm/";
 
-    let rocm_path_str = env::var("ROCM_PATH").map_err(|_| {
-        DEFAULT_ROCM_PATH_STR.to_string()
-    }).unwrap();
+    let rocm_path_str = env::var("ROCM_PATH")
+        .map_err(|_| DEFAULT_ROCM_PATH_STR.to_string())
+        .unwrap();
     println!("Compiling HIPBLAS GGML. Using ROCm from {rocm_path_str}");
 
     let rocm_path = PathBuf::from(rocm_path_str);
@@ -375,6 +399,7 @@ fn compile_hipblas(cx: &mut Build, cxx: &mut Build, mut hip: Build) -> &'static 
     cxx.include(&rocm_include);
 
     hip.compiler(rocm_hip_bin)
+        .std("c++11")
         .file(LLAMA_PATH.join(cuda_file))
         .include(LLAMA_PATH.join(cuda_header))
         .define("GGML_USE_HIPBLAS", None)
@@ -398,13 +423,13 @@ fn compile_cuda(cx: &mut Build, cxx: &mut Build, featless_cxx: Build) -> &'stati
 
     // CUDA gets linked through the cudarc crate.
 
-    cx.define("GGML_USE_CUBLAS", None);
-    cxx.define("GGML_USE_CUBLAS", None);
+    cx.define("GGML_USE_CUDA", None);
+    cxx.define("GGML_USE_CUDA", None);
 
     let mut nvcc = featless_cxx;
     nvcc.cuda(true)
         .flag("--forward-unknown-to-host-compiler")
-        .flag("-arch=native")
+        .flag("-arch=all")
         .define("K_QUANTS_PER_ITERATION", Some("2"))
         .define("GGML_CUDA_PEER_MAX_BATCH_SIZE", Some("128"));
 
@@ -427,9 +452,17 @@ fn compile_cuda(cx: &mut Build, cxx: &mut Build, featless_cxx: Build) -> &'stati
     }
 
     let lib_name = "ggml-cuda";
+    let cuda_path = LLAMA_PATH.join("ggml-cuda");
+    let cuda_sources = read_dir(cuda_path.as_path())
+        .unwrap()
+        .map(|f| f.unwrap())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".cu"))
+        .map(|entry| entry.path());
 
-    nvcc.file(LLAMA_PATH.join("ggml-cuda.cu"))
-        .include(LLAMA_PATH.join("ggml-cuda.h"))
+    nvcc.include(cuda_path.as_path())
+        .include(LLAMA_PATH.as_path())
+        .files(cuda_sources)
+        .file(LLAMA_PATH.join("ggml-cuda.cu"))
         .compile(lib_name);
 
     lib_name
@@ -518,11 +551,11 @@ fn compile_vulkan(cx: &mut Build, cxx: &mut Build) -> &'static str {
 
     if cfg!(debug_assertions) {
         cx.define("GGML_VULKAN_DEBUG", None)
+            .define("GGML_VULKAN_CHECK_RESULTS", None)
             .define("GGML_VULKAN_VALIDATE", None);
-        //.define("GGML_VULKAN_CHECK_RESULTS", None)
         cxx.define("GGML_VULKAN_DEBUG", None)
+            .define("GGML_VULKAN_CHECK_RESULTS", None)
             .define("GGML_VULKAN_VALIDATE", None);
-        //.define("GGML_VULKAN_CHECK_RESULTS", None)
     }
 
     cx.define("GGML_USE_VULKAN", None);
@@ -541,7 +574,8 @@ fn compile_vulkan(cx: &mut Build, cxx: &mut Build) -> &'static str {
 
 fn compile_ggml(mut cx: Build) {
     println!("Compiling GGML..");
-    cx.include(LLAMA_PATH.as_path())
+    cx.std("c11")
+        .include(LLAMA_PATH.as_path())
         .file(LLAMA_PATH.join("ggml.c"))
         .file(LLAMA_PATH.join("ggml-alloc.c"))
         .file(LLAMA_PATH.join("ggml-backend.c"))
@@ -551,7 +585,10 @@ fn compile_ggml(mut cx: Build) {
 
 fn compile_llama(mut cxx: Build, _out_path: impl AsRef<Path>) {
     println!("Compiling Llama.cpp..");
-    cxx.include(LLAMA_PATH.as_path())
+    cxx.std("c++11")
+        .include(LLAMA_PATH.as_path())
+        .file(LLAMA_PATH.join("unicode.cpp"))
+        .file(LLAMA_PATH.join("unicode-data.cpp"))
         .file(LLAMA_PATH.join("llama.cpp"))
         .compile("llama");
 }
@@ -605,13 +642,23 @@ fn main() {
     compile_ggml(cx);
     compile_llama(cxx, &out_path);
 
-    #[cfg(feature = "compat")]
+    #[cfg(all(
+        feature = "compat",
+        not(any(target_os = "macos", target_os = "ios", target_os = "dragonfly"))
+    ))]
     {
         compat::redefine_symbols(out_path, feat_lib);
     }
 }
 
-#[cfg(feature = "compat")]
+// MacOS will prefix all exported symbols with a leading underscore.
+// Additionally, it seems that there are no collision issues when building with both llama and whisper crates, so the
+// compat feature can be ignored.
+
+#[cfg(all(
+    feature = "compat",
+    not(any(target_os = "macos", target_os = "ios", target_os = "dragonfly"))
+))]
 mod compat {
     use std::collections::HashSet;
     use std::fmt::{Display, Formatter};
@@ -713,7 +760,7 @@ mod compat {
                     },
                 ],
             );
-            objcopy_redefine(&objcopy, &lib_name, "llama_", symbols, &out_path);
+            objcopy_redefine(&objcopy, &lib_name, PREFIX, symbols, &out_path);
         }
     }
 
