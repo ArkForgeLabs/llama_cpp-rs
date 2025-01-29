@@ -481,7 +481,7 @@ fn compile_metal(cx: &mut Build, cxx: &mut Build) {
         cx.define("GGML_METAL_NDEBUG", None);
     }
 
-    // It's idomatic to use OUT_DIR for intermediate c/c++ artifacts
+    // It's idiomatic to use OUT_DIR for intermediate c/c++ artifacts
     let out_dir = env::var("OUT_DIR").unwrap();
 
     let ggml_metal_shader_path = LLAMA_PATH.join("ggml-metal.metal");
@@ -491,6 +491,29 @@ fn compile_metal(cx: &mut Build, cxx: &mut Build) {
     let mut ggml_metal_embed_assembly_file = File::create(&ggml_metal_embed_assembly_path)
         .expect("Failed to open ggml-metal-embed.asm file");
 
+    let ggml_metal_shader_out_path = PathBuf::from(&out_dir).join("ggml-metal.metal");
+    let common = LLAMA_PATH.join("ggml-common.h");
+
+    let input_file = File::open(ggml_metal_shader_path).expect("Failed to open input file");
+    let mut output_file = File::create(&ggml_metal_shader_out_path).expect("Failed to create output file");
+
+    let output = Command::new("sed")
+        .arg("-e")
+        .arg(format!("/#include \"ggml-common.h\"/r {}", common.to_string_lossy()))
+        .arg("-e")
+        .arg("/#include \"ggml-common.h\"/d")
+        .stdin(input_file)
+        .stdout(output_file)
+        .output()
+        .expect("Failed to execute command");
+    if !output.status.success() {
+        panic!(
+            "An error has occurred while embedding common file ({}):\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     // The contents of this file is directly copied from the llama.cpp Makefile
     let ggml_metal_embed_assembly_code = format!(
         ".section __DATA, __ggml_metallib\n\
@@ -499,7 +522,7 @@ fn compile_metal(cx: &mut Build, cxx: &mut Build) {
          .incbin \"{}\"\n\
          .globl _ggml_metallib_end\n\
          _ggml_metallib_end:\n",
-        ggml_metal_shader_path
+        ggml_metal_shader_out_path
             .to_str()
             .expect("Failed to convert path to string")
     );
